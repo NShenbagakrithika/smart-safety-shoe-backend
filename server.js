@@ -321,6 +321,78 @@ sensorReference.on(
   }
 );
 
+// ======================================================
+// WATCH FIREBASE MANUAL SOS STATUS
+// ======================================================
+
+let previousSOSState = null;
+
+const sosReference =
+  database.ref("sensorData/manualSOS");
+
+sosReference.on(
+  "value",
+
+  async (snapshot) => {
+
+    const currentSOSState =
+      snapshot.val() === true;
+
+    console.log(
+      "Manual SOS state:",
+      currentSOSState
+    );
+
+    // First reading after Render starts:
+    // remember state but don't send an alert.
+    if (previousSOSState === null) {
+
+      previousSOSState =
+        currentSOSState;
+
+      console.log(
+        "Initial SOS state recorded."
+      );
+
+      return;
+    }
+
+    // Send only when SOS changes false -> true.
+    if (
+      previousSOSState === false &&
+      currentSOSState === true
+    ) {
+
+      console.log(
+        "NEW MANUAL SOS DETECTED"
+      );
+
+      // Get the latest GPS/timestamp from sensorData.
+      const sensorSnapshot =
+        await database
+          .ref("sensorData")
+          .once("value");
+
+      const sensorData =
+        sensorSnapshot.val() || {};
+
+      await sendSOSNotifications(
+        sensorData
+      );
+    }
+
+    previousSOSState =
+      currentSOSState;
+  },
+
+  (error) => {
+
+    console.error(
+      "Manual SOS listener error:",
+      error
+    );
+  }
+);
 
 // ======================================================
 // MANUAL FALL ENDPOINT
