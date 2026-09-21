@@ -37,6 +37,27 @@ app.get("/", (req, res) => {
 
 
 // ======================================================
+// GET REGISTERED PHONES
+// ======================================================
+
+async function getNotificationTokens() {
+
+  const tokensSnapshot =
+    await database
+      .ref("notificationTokens")
+      .once("value");
+
+  const tokenData = tokensSnapshot.val();
+
+  if (!tokenData) {
+    return [];
+  }
+
+  return Object.keys(tokenData);
+}
+
+
+// ======================================================
 // SEND FALL NOTIFICATION
 // ======================================================
 
@@ -44,14 +65,10 @@ async function sendFallNotifications(sensorData) {
 
   try {
 
-    const tokensSnapshot =
-      await database
-        .ref("notificationTokens")
-        .once("value");
+    const tokens =
+      await getNotificationTokens();
 
-    const tokenData = tokensSnapshot.val();
-
-    if (!tokenData) {
+    if (tokens.length === 0) {
 
       console.log(
         "No notification tokens registered."
@@ -59,8 +76,6 @@ async function sendFallNotifications(sensorData) {
 
       return;
     }
-
-    const tokens = Object.keys(tokenData);
 
     console.log(
       `Sending fall alert to ${tokens.length} device(s).`
@@ -74,6 +89,7 @@ async function sendFallNotifications(sensorData) {
         token: token,
 
         data: {
+
           type: "fall_alert",
 
           title:
@@ -112,14 +128,14 @@ async function sendFallNotifications(sensorData) {
             .send(message);
 
         console.log(
-          "Notification sent:",
+          "Fall notification sent:",
           response
         );
 
       } catch (error) {
 
         console.error(
-          "Failed to send to device:",
+          "Failed to send fall notification:",
           error.message
         );
       }
@@ -128,7 +144,101 @@ async function sendFallNotifications(sensorData) {
   } catch (error) {
 
     console.error(
-      "Notification error:",
+      "Fall notification error:",
+      error
+    );
+  }
+}
+
+
+// ======================================================
+// SEND SOS NOTIFICATION
+// ======================================================
+
+async function sendSOSNotifications(sensorData) {
+
+  try {
+
+    const tokens =
+      await getNotificationTokens();
+
+    if (tokens.length === 0) {
+
+      console.log(
+        "No notification tokens registered."
+      );
+
+      return;
+    }
+
+    console.log(
+      `Sending SOS alert to ${tokens.length} device(s).`
+    );
+
+
+    for (const token of tokens) {
+
+      const message = {
+
+        token: token,
+
+        data: {
+
+          type: "sos_alert",
+
+          title:
+            "🆘 SOS Emergency",
+
+          body:
+            "The Smart Safety Shoe wearer manually triggered an emergency alert. Tap to view location.",
+
+          latitude:
+            String(
+              sensorData.latitude ?? ""
+            ),
+
+          longitude:
+            String(
+              sensorData.longitude ?? ""
+            ),
+
+          timestamp:
+            String(
+              sensorData.timestamp ?? ""
+            )
+        },
+
+        android: {
+          priority: "high"
+        }
+      };
+
+
+      try {
+
+        const response =
+          await admin
+            .messaging()
+            .send(message);
+
+        console.log(
+          "SOS notification sent:",
+          response
+        );
+
+      } catch (error) {
+
+        console.error(
+          "Failed to send SOS notification:",
+          error.message
+        );
+      }
+    }
+
+  } catch (error) {
+
+    console.error(
+      "SOS notification error:",
       error
     );
   }
@@ -168,13 +278,7 @@ sensorReference.on(
     );
 
 
-    /*
-     * First Firebase reading:
-     *
-     * Store the state but DO NOT send an alert.
-     * This prevents a notification every time
-     * Render restarts.
-     */
+    // Initial reading - do not send notification
     if (previousFallState === null) {
 
       previousFallState =
@@ -188,11 +292,7 @@ sensorReference.on(
     }
 
 
-    /*
-     * Send notification ONLY when:
-     *
-     * false → true
-     */
+    // Notify only on false -> true
     if (
       previousFallState === false &&
       currentFallState === true
@@ -223,7 +323,7 @@ sensorReference.on(
 
 
 // ======================================================
-// MANUAL TEST ENDPOINT
+// MANUAL FALL ENDPOINT
 // ======================================================
 
 app.post(
@@ -242,6 +342,75 @@ app.post(
       });
 
     } catch (error) {
+
+      res.status(500).json({
+        success: false,
+        error: error.message
+      });
+    }
+  }
+);
+
+
+// ======================================================
+// MANUAL SOS ENDPOINT
+// ======================================================
+
+app.post(
+  "/sos-alert",
+
+  async (req, res) => {
+
+    try {
+
+      /*
+       * Use coordinates supplied by ESP32 if available.
+       *
+       * If they are missing, read the latest GPS data
+       * directly from Firebase.
+       */
+
+      let sensorData =
+        req.body || {};
+
+
+      if (
+        sensorData.latitude == null ||
+        sensorData.longitude == null
+      ) {
+
+        const snapshot =
+          await database
+            .ref("sensorData")
+            .once("value");
+
+        sensorData =
+          snapshot.val() || {};
+      }
+
+
+      console.log(
+        "MANUAL SOS TRIGGERED"
+      );
+
+
+      await sendSOSNotifications(
+        sensorData
+      );
+
+
+      res.status(200).json({
+        success: true,
+        type: "sos_alert"
+      });
+
+    } catch (error) {
+
+      console.error(
+        "SOS endpoint error:",
+        error
+      );
+
 
       res.status(500).json({
         success: false,
