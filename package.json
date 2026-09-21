@@ -1,0 +1,13 @@
+{
+  "name": "smart-safety-shoe-backend",
+  "version": "1.0.0",
+  "description": "FCM notification backend for Smart Safety Shoe",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "firebase-admin": "^13.4.0"
+  }
+}
