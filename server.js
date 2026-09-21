@@ -294,18 +294,34 @@ sensorReference.on(
 
     // Notify only on false -> true
     if (
-      previousFallState === false &&
-      currentFallState === true
-    ) {
+  previousFallState === false &&
+  currentFallState === true
+) {
 
-      console.log(
-        "NEW FALL DETECTED"
-      );
+  console.log(
+    "NEW FALL DETECTED"
+  );
 
-      await sendFallNotifications(
-        sensorData
-      );
-    }
+  // Generate real Unix timestamp in milliseconds
+  const realTimestamp = Date.now();
+
+  // Replace ESP32 uptime timestamp with real server time
+  sensorData.timestamp = realTimestamp;
+
+  // Update Firebase so Android receives the correct time
+  await database
+    .ref("sensorData/timestamp")
+    .set(realTimestamp);
+
+  console.log(
+    "Fall timestamp:",
+    realTimestamp
+  );
+
+  await sendFallNotifications(
+    sensorData
+  );
+}
 
 
     previousFallState =
@@ -374,11 +390,27 @@ sosReference.on(
           .once("value");
 
       const sensorData =
-        sensorSnapshot.val() || {};
+  sensorSnapshot.val() || {};
 
-      await sendSOSNotifications(
-        sensorData
-      );
+// Generate real Unix timestamp in milliseconds
+const realTimestamp = Date.now();
+
+// Replace ESP32 uptime timestamp
+sensorData.timestamp = realTimestamp;
+
+// Update Firebase so Android receives the correct time
+await database
+  .ref("sensorData/timestamp")
+  .set(realTimestamp);
+
+console.log(
+  "SOS timestamp:",
+  realTimestamp
+);
+
+await sendSOSNotifications(
+  sensorData
+);
     }
 
     previousSOSState =
