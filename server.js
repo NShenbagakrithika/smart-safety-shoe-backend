@@ -89,7 +89,7 @@ async function sendFallNotifications(sensorData) {
         token: token,
 
         data: {
-
+          gpsValid: String(sensorData.gpsValid === true),
           type: "fall_alert",
 
           title:
@@ -183,7 +183,7 @@ async function sendSOSNotifications(sensorData) {
         token: token,
 
         data: {
-
+          gpsValid: String(sensorData.gpsValid === true),
           type: "sos_alert",
 
           title:
@@ -292,9 +292,12 @@ sensorReference.on(
     }
 
 
+    const wasFall = previousFallState;
+    previousFallState = currentFallState; // Record before any awaited Firebase mutation.
+
     // Notify only on false -> true
     if (
-  previousFallState === false &&
+  wasFall === false &&
   currentFallState === true
 ) {
 
@@ -308,24 +311,22 @@ sensorReference.on(
   // Replace ESP32 uptime timestamp with real server time
   sensorData.timestamp = realTimestamp;
 
-  // Update Firebase so Android receives the correct time
-  await database
-    .ref("sensorData/timestamp")
-    .set(realTimestamp);
+  // A timestamp write failure must not prevent the notification.
+  await database.ref("sensorData/timestamp").set(realTimestamp)
+    .catch(() => console.error("Fall timestamp update failed"));
 
   console.log(
     "Fall timestamp:",
     realTimestamp
   );
 
+  void recordEmergency("fall", sensorData, "device");
   await sendFallNotifications(
     sensorData
   );
 }
 
 
-    previousFallState =
-      currentFallState;
   },
 
   (error) => {
@@ -373,9 +374,12 @@ sosReference.on(
       return;
     }
 
+    const wasSOS = previousSOSState;
+    previousSOSState = currentSOSState;
+
     // Send only when SOS changes false -> true.
     if (
-      previousSOSState === false &&
+      wasSOS === false &&
       currentSOSState === true
     ) {
 
@@ -387,7 +391,7 @@ sosReference.on(
       const sensorSnapshot =
         await database
           .ref("sensorData")
-          .once("value");
+          .once("value").catch(() => ({ val: () => ({}) }));
 
       const sensorData =
   sensorSnapshot.val() || {};
@@ -399,22 +403,20 @@ const realTimestamp = Date.now();
 sensorData.timestamp = realTimestamp;
 
 // Update Firebase so Android receives the correct time
-await database
-  .ref("sensorData/timestamp")
-  .set(realTimestamp);
+await database.ref("sensorData/timestamp").set(realTimestamp)
+  .catch(() => console.error("SOS timestamp update failed"));
 
 console.log(
   "SOS timestamp:",
   realTimestamp
 );
 
+void recordEmergency("sos", sensorData, "device");
 await sendSOSNotifications(
   sensorData
 );
     }
 
-    previousSOSState =
-      currentSOSState;
   },
 
   (error) => {
@@ -432,11 +434,13 @@ await sendSOSNotifications(
 
 app.post(
   "/fall-alert",
+  authorizeAlert,
 
   async (req, res) => {
 
     try {
 
+      void recordEmergency("fall", req.body || {}, "endpoint");
       await sendFallNotifications(
         req.body
       );
@@ -462,6 +466,7 @@ app.post(
 
 app.post(
   "/sos-alert",
+  authorizeAlert,
 
   async (req, res) => {
 
@@ -498,6 +503,7 @@ app.post(
       );
 
 
+      void recordEmergency("sos", sensorData, "endpoint");
       await sendSOSNotifications(
         sensorData
       );
@@ -548,7 +554,7 @@ app.listen(
 // OPTIONAL ML FALL ALERTS (separate from existing sensorData)
 // Set ENABLE_ML_NOTIFICATIONS=true only after testing.
 // ======================================================
-if (process.env.ENABLE_ML_NOTIFICATIONS === 'true') {
+if (process.env.ENABLE_ML_NOTIFICATIONS === 'true' || process.env.ENABLE_ANALYTICS === 'true') {
   let previousMLFall = null;
   let lastMLAlertAt = 0;
   const cooldownMs = 60 * 1000;
@@ -562,17 +568,19 @@ if (process.env.ENABLE_ML_NOTIFICATIONS === 'true') {
     }
     if (!previousMLFall && current && Date.now() - lastMLAlertAt > cooldownMs) {
       // Ignore stale events; Render may restart or reconnect.
-      if (Number.isFinite(ml.timestamp) && Date.now() - ml.timestamp < 15000) {
+      if (Number.isFinite(ml.timestamp) && Date.now() - ml.timestamp >= 0 && Date.now() - ml.timestamp < 15000) {
         lastMLAlertAt = Date.now();
         try {
           const sensorSnapshot = await database.ref('sensorData').once('value');
           const sensor = sensorSnapshot.val() || {};
-          await sendFallNotifications({
+          void recordEmergency('fall', { ...sensor, timestamp: ml.timestamp, probability: ml.probability }, 'sisfall-rf');
+          if (process.env.ENABLE_ML_NOTIFICATIONS === 'true') await sendFallNotifications({
             latitude: sensor.latitude,
             longitude: sensor.longitude,
+            gpsValid: sensor.gpsValid,
             timestamp: ml.timestamp,
           });
-          console.log('ML fall notification dispatched');
+          console.log(process.env.ENABLE_ML_NOTIFICATIONS === 'true' ? 'ML fall notification dispatched' : 'ML fall recorded for history');
         } catch (err) {
           console.error('ML notification error:', err);
         }
@@ -580,4 +588,41 @@ if (process.env.ENABLE_ML_NOTIFICATIONS === 'true') {
     }
     previousMLFall = current;
   }, (error) => console.error('ML listener error:', error));
+}
+
+
+// Optional shared secret for existing device/server callers. Configure caller first.
+function authorizeAlert(req, res, next) {
+  const secret = process.env.ALERT_API_KEY;
+  const supplied = req.get('X-API-Key') || '';
+  const crypto = require('node:crypto');
+  if (secret && (Buffer.byteLength(secret) !== Buffer.byteLength(supplied) ||
+      !crypto.timingSafeEqual(Buffer.from(secret), Buffer.from(supplied)))) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
+}
+
+// History failures never suppress emergency delivery. Existing fallEvents untouched.
+async function recordEmergency(type, sensor, source) {
+  if (process.env.ENABLE_ANALYTICS !== 'true') return;
+  try {
+    const now = Date.now();
+    const event = { type, source, timestamp: now };
+    if (Number.isFinite(sensor.probability)) event.probability = sensor.probability;
+    if (sensor.gpsValid === true && Number.isFinite(sensor.latitude) &&
+        Number.isFinite(sensor.longitude) && Math.abs(sensor.latitude) <= 90 &&
+        Math.abs(sensor.longitude) <= 180) {
+      event.latitude = sensor.latitude;
+      event.longitude = sensor.longitude;
+      event.gpsValid = true;
+    }
+    await database.ref('analytics/events').push(event);
+    const cutoff = now - 365 * 86400000;
+    const expired = await database.ref('analytics/events').orderByChild('timestamp')
+      .endAt(cutoff).limitToFirst(100).once('value');
+    const updates = {};
+    expired.forEach(child => { updates[child.key] = null; });
+    if (Object.keys(updates).length) await database.ref('analytics/events').update(updates);
+  } catch (_) { console.error('Emergency history write failed; continuing alert delivery'); }
 }
