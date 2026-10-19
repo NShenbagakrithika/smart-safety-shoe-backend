@@ -543,3 +543,41 @@ app.listen(
     );
   }
 );
+
+// ======================================================
+// OPTIONAL ML FALL ALERTS (separate from existing sensorData)
+// Set ENABLE_ML_NOTIFICATIONS=true only after testing.
+// ======================================================
+if (process.env.ENABLE_ML_NOTIFICATIONS === 'true') {
+  let previousMLFall = null;
+  let lastMLAlertAt = 0;
+  const cooldownMs = 60 * 1000;
+  database.ref('mlPrediction').on('value', async (snapshot) => {
+    const ml = snapshot.val();
+    if (!ml) return;
+    const current = ml.fallDetected === true;
+    if (previousMLFall === null) {
+      previousMLFall = current;
+      return; // No alert on initial startup.
+    }
+    if (!previousMLFall && current && Date.now() - lastMLAlertAt > cooldownMs) {
+      // Ignore stale events; Render may restart or reconnect.
+      if (Number.isFinite(ml.timestamp) && Date.now() - ml.timestamp < 15000) {
+        lastMLAlertAt = Date.now();
+        try {
+          const sensorSnapshot = await database.ref('sensorData').once('value');
+          const sensor = sensorSnapshot.val() || {};
+          await sendFallNotifications({
+            latitude: sensor.latitude,
+            longitude: sensor.longitude,
+            timestamp: ml.timestamp,
+          });
+          console.log('ML fall notification dispatched');
+        } catch (err) {
+          console.error('ML notification error:', err);
+        }
+      }
+    }
+    previousMLFall = current;
+  }, (error) => console.error('ML listener error:', error));
+}
