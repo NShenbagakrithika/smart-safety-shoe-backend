@@ -564,7 +564,7 @@ if (
 
 // Allow up to 30 seconds of clock difference
   const ML_MAX_AGE_MS = 30000;
-  const ML_FUTURE_TOLERANCE_MS = 30000;
+  const ML_FUTURE_TOLERANCE_MS = 90000;
 
   let lastMLAlertAt = 0;
   let lastProcessedMLTimestamp = 0;
