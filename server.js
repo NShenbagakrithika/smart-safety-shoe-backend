@@ -551,51 +551,222 @@ app.listen(
 );
 
 // ======================================================
-// OPTIONAL ML FALL ALERTS (separate from existing sensorData)
-// Set ENABLE_ML_NOTIFICATIONS=true only after testing.
+// ML FALL NOTIFICATION LISTENER
+// Uses the existing Firebase + FCM notification service
 // ======================================================
-if (process.env.ENABLE_ML_NOTIFICATIONS === 'true' || process.env.ENABLE_ANALYTICS === 'true') {
-  let previousMLFall = null;
+
+if (
+  process.env.ENABLE_ML_NOTIFICATIONS === "true" ||
+  process.env.ENABLE_ANALYTICS === "true"
+) {
+
+  console.log("ML prediction listener enabled");
+
+  const ML_COOLDOWN_MS = 60000;
+  const ML_MAX_AGE_MS = 15000;
+
   let lastMLAlertAt = 0;
-  const cooldownMs = 60 * 1000;
-  database.ref('mlPrediction').on('value', async (snapshot) => {
-    const ml = snapshot.val();
-    if (!ml) return;
-    console.log("========== ML EVENT ==========");
-    console.log("Fall detected:", ml.fallDetected);
-    console.log("Probability:", ml.probability);
-    console.log("Timestamp:", ml.timestamp);
-    console.log("Current time:", Date.now());
-    console.log("Age in milliseconds:", Date.now() - ml.timestamp);
-    console.log("Previous fall state:", previousMLFall);
-    console.log("==============================");
-    const current = ml.fallDetected === true;
-    if (previousMLFall === null) {
-      previousMLFall = current;
-      return; // No alert on initial startup.
-    }
-    if (!previousMLFall && current && Date.now() - lastMLAlertAt > cooldownMs) {
-      // Ignore stale events; Render may restart or reconnect.
-      if (Number.isFinite(ml.timestamp) && Date.now() - ml.timestamp >= 0 && Date.now() - ml.timestamp < 15000) {
-        lastMLAlertAt = Date.now();
-        try {
-          const sensorSnapshot = await database.ref('sensorData').once('value');
-          const sensor = sensorSnapshot.val() || {};
-          void recordEmergency('fall', { ...sensor, timestamp: ml.timestamp, probability: ml.probability }, 'sisfall-rf');
-          if (process.env.ENABLE_ML_NOTIFICATIONS === 'true') await sendFallNotifications({
-            latitude: sensor.latitude,
-            longitude: sensor.longitude,
-            gpsValid: sensor.gpsValid,
-            timestamp: ml.timestamp,
-          });
-          console.log(process.env.ENABLE_ML_NOTIFICATIONS === 'true' ? 'ML fall notification dispatched' : 'ML fall recorded for history');
-        } catch (err) {
-          console.error('ML notification error:', err);
-        }
+  let lastProcessedMLTimestamp = 0;
+  let mlListenerInitialized = false;
+  let mlAlertInProgress = false;
+
+  const mlReference = database.ref("mlPrediction");
+
+  mlReference.on(
+    "value",
+
+    async (snapshot) => {
+
+      const ml = snapshot.val();
+
+      if (!ml || typeof ml !== "object") {
+        return;
       }
+
+      const currentFall = ml.fallDetected === true;
+      const predictionTimestamp = Number(ml.timestamp);
+      const now = Date.now();
+
+      console.log("========== ML PREDICTION ==========");
+      console.log("Fall detected:", currentFall);
+      console.log("Probability:", ml.probability);
+      console.log("Threshold:", ml.threshold);
+      console.log("Prediction timestamp:", predictionTimestamp);
+      console.log("Current timestamp:", now);
+      console.log("===================================");
+
+      // --------------------------------------------
+      // 1. Validate timestamp
+      // --------------------------------------------
+
+      if (!Number.isFinite(predictionTimestamp)) {
+        console.log("ML: Invalid timestamp");
+        return;
+      }
+
+      // --------------------------------------------
+      // 2. Ignore existing data on startup
+      // --------------------------------------------
+
+      if (!mlListenerInitialized) {
+
+        mlListenerInitialized = true;
+
+        lastProcessedMLTimestamp = predictionTimestamp;
+
+        console.log("ML: Initial prediction recorded");
+
+        return;
+      }
+
+      // --------------------------------------------
+      // 3. Ignore previously processed predictions
+      // --------------------------------------------
+
+      if (predictionTimestamp <= lastProcessedMLTimestamp) {
+
+        console.log("ML: Prediction already processed");
+
+        return;
+      }
+
+      lastProcessedMLTimestamp = predictionTimestamp;
+
+      // --------------------------------------------
+      // 4. Check prediction freshness
+      // --------------------------------------------
+
+      const predictionAge = now - predictionTimestamp;
+
+      if (
+        predictionAge < 0 ||
+        predictionAge > ML_MAX_AGE_MS
+      ) {
+
+        console.log(
+          "ML: Prediction rejected due to age:",
+          predictionAge
+        );
+
+        return;
+      }
+
+      // --------------------------------------------
+      // 5. Check whether a fall was detected
+      // --------------------------------------------
+
+      if (!currentFall) {
+
+        console.log("ML: Normal activity detected");
+
+        return;
+      }
+
+      console.log("ML: FALL DETECTED");
+
+      // --------------------------------------------
+      // 6. Prevent duplicate notifications
+      // --------------------------------------------
+
+      if (
+        now - lastMLAlertAt < ML_COOLDOWN_MS ||
+        mlAlertInProgress
+      ) {
+
+        console.log("ML: Notification cooldown active");
+
+        return;
+      }
+
+      mlAlertInProgress = true;
+      lastMLAlertAt = now;
+
+      // --------------------------------------------
+      // 7. Fetch GPS from existing sensorData
+      // --------------------------------------------
+
+      try {
+
+        const sensorSnapshot = await database
+          .ref("sensorData")
+          .once("value");
+
+        const sensor = sensorSnapshot.val() || {};
+
+        const notificationData = {
+
+          latitude: sensor.latitude,
+
+          longitude: sensor.longitude,
+
+          gpsValid: sensor.gpsValid,
+
+          timestamp: predictionTimestamp,
+
+          probability: ml.probability
+
+        };
+
+        // ------------------------------------------
+        // 8. Record ML emergency in analytics
+        // ------------------------------------------
+
+        void recordEmergency(
+          "fall",
+          notificationData,
+          "sisfall-rf"
+        );
+
+        // ------------------------------------------
+        // 9. Send notification using existing FCM
+        // ------------------------------------------
+
+        if (
+          process.env.ENABLE_ML_NOTIFICATIONS === "true"
+        ) {
+
+          console.log(
+            "ML: Sending fall notification through FCM"
+          );
+
+          await sendFallNotifications(notificationData);
+
+          console.log(
+            "ML: Notification dispatch completed"
+          );
+
+        } else {
+
+          console.log(
+            "ML: Fall recorded; notifications disabled"
+          );
+
+        }
+
+      } catch (error) {
+
+        console.error(
+          "ML notification processing error:",
+          error
+        );
+
+      } finally {
+
+        mlAlertInProgress = false;
+
+      }
+
+    },
+
+    (error) => {
+
+      console.error(
+        "ML Firebase listener error:",
+        error
+      );
+
     }
-    previousMLFall = current;
-  }, (error) => console.error('ML listener error:', error));
+  );
 }
 
 
