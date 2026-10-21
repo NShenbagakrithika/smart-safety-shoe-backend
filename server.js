@@ -682,7 +682,6 @@ console.log("ML: Timestamp accepted");
       }
 
       mlAlertInProgress = true;
-      lastMLAlertAt = now;
 
       // --------------------------------------------
       // 7. Fetch GPS from existing sensorData
@@ -734,6 +733,7 @@ console.log("ML: Timestamp accepted");
           );
 
           await sendFallNotifications(notificationData, "ml");
+          lastMLAlertAt = Date.now();
 
           console.log(
             "ML: Notification dispatch completed"
