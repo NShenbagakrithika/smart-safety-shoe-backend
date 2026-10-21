@@ -561,6 +561,14 @@ if (process.env.ENABLE_ML_NOTIFICATIONS === 'true' || process.env.ENABLE_ANALYTI
   database.ref('mlPrediction').on('value', async (snapshot) => {
     const ml = snapshot.val();
     if (!ml) return;
+    console.log("========== ML EVENT ==========");
+    console.log("Fall detected:", ml.fallDetected);
+    console.log("Probability:", ml.probability);
+    console.log("Timestamp:", ml.timestamp);
+    console.log("Current time:", Date.now());
+    console.log("Age in milliseconds:", Date.now() - ml.timestamp);
+    console.log("Previous fall state:", previousMLFall);
+    console.log("==============================");
     const current = ml.fallDetected === true;
     if (previousMLFall === null) {
       previousMLFall = current;
