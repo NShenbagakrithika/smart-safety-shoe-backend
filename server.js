@@ -561,7 +561,10 @@ if (
   console.log("ML prediction listener enabled");
 
   const ML_COOLDOWN_MS = 60000;
-  const ML_MAX_AGE_MS = 15000;
+
+// Allow up to 30 seconds of clock difference
+  const ML_MAX_AGE_MS = 30000;
+  const ML_FUTURE_TOLERANCE_MS = 30000;
 
   let lastMLAlertAt = 0;
   let lastProcessedMLTimestamp = 0;
@@ -637,17 +640,19 @@ if (
       const predictionAge = now - predictionTimestamp;
 
       if (
-        predictionAge < 0 ||
+        predictionAge < -ML_FUTURE_TOLERANCE_MS ||
         predictionAge > ML_MAX_AGE_MS
       ) {
 
-        console.log(
-          "ML: Prediction rejected due to age:",
-          predictionAge
-        );
+      console.log(
+        "ML: Prediction rejected due to age:",
+      predictionAge
+    );
 
-        return;
-      }
+    return;
+  }
+
+console.log("ML: Timestamp accepted");
 
       // --------------------------------------------
       // 5. Check whether a fall was detected
@@ -693,17 +698,18 @@ if (
 
         const notificationData = {
 
-          latitude: sensor.latitude,
+  latitude: sensor.latitude,
 
-          longitude: sensor.longitude,
+  longitude: sensor.longitude,
 
-          gpsValid: sensor.gpsValid,
+  gpsValid: sensor.gpsValid,
 
-          timestamp: predictionTimestamp,
+  // Use Render server time for the notification
+  timestamp: Date.now(),
 
-          probability: ml.probability
+  probability: ml.probability
 
-        };
+};
 
         // ------------------------------------------
         // 8. Record ML emergency in analytics
