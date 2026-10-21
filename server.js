@@ -61,7 +61,7 @@ async function getNotificationTokens() {
 // SEND FALL NOTIFICATION
 // ======================================================
 
-async function sendFallNotifications(sensorData) {
+async function sendFallNotifications(sensorData, source = "normal") {
 
   try {
 
@@ -92,11 +92,9 @@ async function sendFallNotifications(sensorData) {
           gpsValid: String(sensorData.gpsValid === true),
           type: "fall_alert",
 
-          title:
-            "🚨 Fall Detected",
+          title: source === "ml" ? "🚨 ML Fall Detected" : "🚨 Fall Detected",
 
-          body:
-            "Possible fall detected by Smart Safety Shoe. Tap to view location.",
+          body: source === "ml" ? "Random Forest detected a possible fall. Tap to view location." : "Possible fall detected by Smart Safety Shoe. Tap to view location.",
 
           latitude:
             String(
@@ -729,7 +727,7 @@ if (
             "ML: Sending fall notification through FCM"
           );
 
-          await sendFallNotifications(notificationData);
+          await sendFallNotifications(notificationData, "ml");
 
           console.log(
             "ML: Notification dispatch completed"
